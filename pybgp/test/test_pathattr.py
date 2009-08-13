@@ -5,6 +5,65 @@ import unittest
 
 from pybgp import pathattr, nlri
 
+class TestOrigin(unittest.TestCase):
+    def test_encode(self):
+        orig = pathattr.Origin('igp')
+
+        b = orig.encode()
+
+        self.assertEqual(b, '\x40\x01\x01\x00')
+
+    def test_decode(self):
+        b = '\x40\x01\x01\x02'
+
+        used, orig = pathattr.decode(b)
+
+        self.assertEqual(used, len(b))
+        self.failUnless(isinstance(orig, pathattr.Origin))
+
+        self.assertEqual(orig.value, 'incomplete')
+
+class TestAsPath(unittest.TestCase):
+    def sample(self):
+        shouldb = '\x40\x02'    # as path
+
+        payload = '\x02\x02'    # as path
+        payload += '\xff\xff'   # 65535
+        payload += '\xff\xfe'   # 65534
+
+        payload += '\x01\x02'    # as set
+        payload += '\xde\xad'   # 57005
+        payload += '\xbe\xef'   # 48879
+
+        shouldb += chr(len(payload))
+        shouldb += payload
+
+        return shouldb
+
+    def test_encode(self):
+        aspath = pathattr.AsPath([
+            [65535,65534],
+            set([57005, 48879]),
+            ])
+
+        b = aspath.encode()
+
+        self.assertEqual(b, self.sample())
+
+    def test_decode(self):
+        b = self.sample()
+
+        used, aspath = pathattr.decode(b)
+
+        self.assertEqual(used, len(b))
+        self.failUnless(isinstance(aspath, pathattr.AsPath))
+
+        self.assertEqual(aspath.value, [
+            [65535,65534],
+            set([57005,48879]),
+            ])
+
+
 class TestMed(unittest.TestCase):
     def test_encode(self):
         med = pathattr.Med(32)
@@ -18,6 +77,8 @@ class TestMed(unittest.TestCase):
         used, med = pathattr.decode(b)
 
         self.assertEqual(used, len(b))
+        self.failUnless(isinstance(med, pathattr.Med))
+
         self.assertEqual(med.value, 32)
 
 class TestExtCommunity(unittest.TestCase):
@@ -37,6 +98,8 @@ class TestExtCommunity(unittest.TestCase):
         used, ext = pathattr.decode(b)
 
         self.assertEqual(used, len(b))
+        self.failUnless(isinstance(ext, pathattr.ExtCommunity))
+
         self.assertEqual(ext.value, ['RT:192.168.0.0:1'])
 
 class TestMpReachNlri(unittest.TestCase):
@@ -79,7 +142,10 @@ class TestMpReachNlri(unittest.TestCase):
         b += payload
 
         used, mpreach = pathattr.decode(b)
+
         self.assertEqual(used, len(b))
+        self.failUnless(isinstance(mpreach, pathattr.MpReachNlri))
+
         self.assertEqual(mpreach.value['afi'], 1)
         self.assertEqual(mpreach.value['safi'], 128)
         self.assertEqual(mpreach.value['nh'], '192.168.1.1')
