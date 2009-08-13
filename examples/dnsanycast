@@ -1,0 +1,128 @@
+#!/usr/bin/python2.5
+
+from twisted.internet import reactor, protocol
+
+from pybgp import speaker, pathattr, proto
+
+import tcpcheck
+
+# This script is a simple example of the pybgp library. The setup below
+# assumes the following config:
+#
+# router 192.168.1.1 AS# 65000
+#  |
+# us     192.168.1.2 AS# 65001
+#
+# ...and virtual IPs bound to the loopback interface, on which a DNS
+# server will be listening - e.g. under linux:
+#
+# ip addr add 192.168.2.1/32 dev lo
+# ip addr add 192.168.2.2/32 dev lo
+# rndc reload
+#
+# As long as the virtual IPs continue to answer TCP port 53 connects the
+# VIPs will be advertised by eBGP to the router
+
+class Checker(tcpcheck.Checker):
+    def change(self, old, new):
+        if new=='up':
+            self.bgp.advertise('%s/32' % (self.host,))
+        else:
+            self.bgp.withdraw('%s/32' % (self.host,))
+
+class BGPp(speaker.BGP):
+    def send(self, msg):
+        print "sending", msg
+        speaker.BGP.send(self, msg)
+
+class BGPd:
+    # This is all a bit hacky. Proper support for both listening and
+    # connecting, the BGP state machine, disconnects and so forth are
+    # all needed...
+
+    def __init__(self, asnum, bgpid):
+        self.cc = protocol.ClientCreator(reactor, BGPp)
+        self.asnum = asnum
+        self.bgpid = bgpid
+        self.peers = {}
+
+    def peer(self, ip, remoteas):
+        if ip in self.peers:
+            raise Exception('connection already established')
+
+        self.peers[ip] = {'remoteas': remoteas, 'state': 'opening', 'proto': None, 'queue': []}
+
+        d = self.cc.connectTCP(ip, 179)
+        d.addCallbacks(self.ok, self.err, (ip,), {}, (ip,), {})
+
+    def ok(self, proto, ip):
+        print "connection to", ip, "up"
+        self.peers[ip]['proto'] = proto
+        self.peers[ip]['state'] = 'open'
+
+        # send our Open message
+        proto.open(self.asnum, self.bgpid)
+        proto.handle_msg = lambda x: self.msg(ip, x)
+
+    def msg(self, ip, msg):
+        if not ip in self.peers:
+            return
+        proto = self.peers[ip]['proto']
+
+        if msg.kind=='open':
+            proto.start_timer(msg.holdtime)
+
+            q = self.peers[ip]['queue']
+            while q:
+                action, data = q.pop(0)
+                if action=='update':
+                    proto.send(data)
+
+        elif msg.kind=='notification':
+            print "notification from", ip, msg
+            proto.transport.loseConnection()
+            del self.peers[ip]
+
+    def err(self, reason, ip):
+        if not ip in self.peers:
+            return
+        print "connection to", ip, "failed", reason
+        del self.peers[ip]
+
+    def advertise(self, prefix):
+        up = proto.Update(
+            pathattr.Origin('incomplete'),
+            pathattr.Med(0),
+            pathattr.AsPath([[self.asnum]]),
+            pathattr.NextHop('155.198.62.12'),
+            nlri=[prefix],
+            )
+        for p, info in self.peers.items():
+            if info['state']=='open':
+                info['proto'].send(up)
+            else:
+                info['queue'].append(('update', up))
+        
+    def withdraw(self, prefix):
+        up = proto.Update(
+            withdraw=[prefix],
+            )
+        for p, info in self.peers.items():
+            if info['state']=='open':
+                info['proto'].send(up)
+            else:
+                info['queue'].append(('update', up))
+        
+
+def main():
+    b = BGPd(65001, '192.168.1.2')
+    b.peer('192.168.1.1', 65000)
+
+    for ip in ('192.168.2.1', '192.168.2.2'):
+        c = Checker(ip, 53, '127.0.0.1')
+        c.bgp = b
+        c.start(5)
+
+if __name__=='__main__':
+    reactor.callWhenRunning(main)
+    reactor.run()
