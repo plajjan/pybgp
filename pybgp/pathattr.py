@@ -304,6 +304,8 @@ class ClusterList(PathAttr):
 class MpReachNlri(PathAttr):
     typenum = 14
     type = 'mp-reach-nlri'
+    reserved = None
+
     def __init__(self, val):
         self.value = val
 
@@ -317,16 +319,25 @@ class MpReachNlri(PathAttr):
 
     def from_bytes(cls, val):
         afi, safi, nhlen = struct.unpack_from('!HBB', val)
+        fmt = '%dsB' % (nhlen,)
+        nh, reserved = struct.unpack_from(fmt, val, 4)
 
-        nh = val[4:4+nhlen]
         if afi==1 and safi==128:
             # vpnv4
             rdlo, rdhi, nhip = struct.unpack('!II4s', nh)
             nh = socket.inet_ntoa(nhip)
 
-        n = nlri.parse(val[4+nhlen:], afi, safi)
+        n = nlri.parse(val[5+nhlen:], afi, safi)
 
-        return cls(dict(afi=afi, safi=safi, nh=nh, nlri=n))
+        v = cls(dict(afi=afi, safi=safi, nh=nh, nlri=n))
+
+
+        if reserved:
+            # probably useless, but pass it through anyway
+            v.reserved = reserved
+
+        return v
+
     from_bytes = classmethod(from_bytes)
 
     def packvalue(self):
@@ -340,6 +351,8 @@ class MpReachNlri(PathAttr):
 
         v = struct.pack('!HBB', afi, safi, len(nh))
         v += nh
+        v += chr(self.reserved or 0)
+
         for n in self.value['nlri']:
             v += n.encode()
         return v

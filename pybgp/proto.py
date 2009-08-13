@@ -52,7 +52,7 @@ class Open:
                     if kind==1:
                         kind = 'mbgp'
                         iidx = 0
-                        afi, safi = struct.unpack_from('!HH', cap)
+                        afi, reserved, safi = struct.unpack_from('!HBB', cap)
                         cap = dict(afi=afi, safi=safi)
                     elif kind==2:
                         kind = 'refresh'
