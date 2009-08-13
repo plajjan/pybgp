@@ -13,6 +13,7 @@ class BGP(protocol.Protocol):
         self.holdtime = None
         self.keepalive = None
         self.expiry = None
+        self.closed = None
 
     def open(self, asnum, bgpid, holdtime=60, **caps):
         self.holdtime = holdtime
@@ -26,6 +27,8 @@ class BGP(protocol.Protocol):
             self.expiry.cancel()
         if self.keepalive:
             self.keepalive.stop()
+        if self.closed:
+            self.closed(reason)
 
     def dataReceived(self, data):
         self.buffer += data

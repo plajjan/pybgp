@@ -43,9 +43,14 @@ class Peer:
         self.host = ip
         self.asnum = remoteas
         self.process = process
-        self.state = 'idle'
 
+        self.reinit()
+
+    def reinit(self, reconnect=False):
+        self.state = 'idle'
         self.routes = None
+        if reconnect:
+            reactor.callLater(5, self.start)
 
     def start(self):
         if self.state!='idle':
@@ -57,8 +62,13 @@ class Peer:
         d = bgp_connect.connectTCP(self.host, 179)
         d.addCallbacks(self.ok, self.err)
 
+    def closed(self, reason):
+        log.msg("connection to", self.host, "lost", reason)
+        self.reinit(True)
+
     def ok(self, protocol):
         self.proto = protocol
+        self.proto.closed = self.closed
         self.state = 'connected'
 
         log.msg("peer connected", self.host)
@@ -72,8 +82,7 @@ class Peer:
     def err(self, reason):
         log.msg("connection to", self.host, "failed", reason)
 
-        self.state = 'idle'
-        
+        self.reinit()
         reactor.callLater(5, self.start)
 
     def msg(self, msg):
@@ -92,10 +101,7 @@ class Peer:
             log.msg("notification from", self.host, msg)
             self.proto.transport.loseConnection()
 
-            self.state = 'idle'
-            self.proto = None
-
-            reactor.callLater(5, self.start)
+            self.reinit(True)
 
     def send_updates(self):
         if self.state!='open':
