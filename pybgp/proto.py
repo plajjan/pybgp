@@ -133,6 +133,28 @@ class Notification:
     kind = 'notification'
     number = 3
 
+    REASONS = {
+        (1,1): 'not synchronised',
+        (1,2): 'bad message len',
+        (1,3): 'bad message type',
+        (2,1): 'unsupported version',
+        (2,2): 'bad peer AS',
+        (2,3): 'bad BGP identifier',
+        (2,4): 'unsupported optional param',
+        (2,5): 'authentication failure',
+        (2,6): 'unacceptable hold time',
+        (3,1): 'malformed attribute list',
+        (3,2): 'unrecognized well-known attr',
+        (3,3): 'missing well-known attr',
+        (3,4): 'attribute flags error',
+        (3,5): 'attribute length error',
+        (3,6): 'invalid origin attr',
+        (3,7): 'as routing loop',
+        (3,8): 'invalid next hop attr',
+        (3,9): 'operational attribute error',
+        (3,10): 'invalid network field',
+    }
+
     def from_bytes(cls, bytes):
         self = cls()
 
@@ -143,11 +165,33 @@ class Notification:
     from_bytes = classmethod(from_bytes)
 
     def __str__(self):
+        c, s = self.code, self.subcode
+        if (c,s) in self.REASONS:
+            return 'Notification "%s" params %r' % (self.REASONS[c,s], self.data)
         return 'Notification message code=%d subcode=%d params=%r' % (self.code, self.subcode, self.data)
 
 class Update:
     kind = 'update'
     number = 2
+
+    def __init__(self, *pathattr, **kw):
+        self.nlri = []
+        self.withdraw = []
+        self.pathattr = OD()
+
+        for n in kw.pop('nlri', []):
+            if isinstance(n, str):
+                n = nlri.ipv4(n)
+            self.nlri.append(n)
+
+        for w in kw.pop('withdraw', []):
+            if isinstance(w, str):
+                w = nlri.ipv4(w)
+            self.withdraw.append(w)
+
+        self.pathattr = OD()
+        for p in pathattr:
+            self.pathattr[p.type] = p
 
     def from_bytes(cls, bytes):
         self = cls()

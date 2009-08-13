@@ -10,19 +10,14 @@ class BGP(protocol.Protocol):
 
     def connectionMade(self):
         self.buffer = ''
-        self.holdtime = 60
+        self.holdtime = None
         self.keepalive = None
         self.expiry = None
 
-        open = proto.Open(asnum=64580, bgpid='155.198.51.97', holdtime=self.holdtime)
-        open.caps['mbgp'] = (
-                dict(afi=1,safi=1),
-                dict(afi=1,safi=128),
-                )
-        open.caps['refresh'] = ['']
-
-        print open
-
+    def open(self, asnum, bgpid, holdtime=60, **caps):
+        self.holdtime = holdtime
+        open = proto.Open(asnum=asnum, bgpid=bgpid, holdtime=holdtime)
+        open.caps = caps
         self.send(open)
 
     def connectionLost(self, reason):
@@ -47,7 +42,7 @@ class BGP(protocol.Protocol):
 
             msg = self.parse_msg(msg)
 
-            self.handle_msg(msg)
+            self._handle_msg(msg)
 
     def parse_msg(self, msg):
         auth, length, type = struct.unpack('!16sHB', msg[:19])
@@ -74,26 +69,27 @@ class BGP(protocol.Protocol):
         msg = struct.pack('!16sHB', '\xff'*16, 19+len(body), msg.number) + body
         self.transport.write(msg)
 
-    def handle_msg(self, msg):
-        if msg.kind=='open':
-
-            self.holdtime = min(self.holdtime, msg.holdtime)
-
-            # setup the function to send keepalives
-            self.keepalive = task.LoopingCall(self.send_keepalive)
-            interval = self.holdtime / 2
-            self.keepalive.start(interval)
-
-            # setup the expiry timer
-            self.expiry = reactor.callLater(self.holdtime, self.expired)
-
-        elif msg.kind=='keepalive':
+    def _handle_msg(self, msg):
+        if msg.kind=='keepalive':
             if self.expiry:
                 self.expiry.reset(self.holdtime)
+            return
 
-        elif msg.kind=='update':
-            print "update"
-            print msg
+        self.handle_msg(msg)
+
+    def handle_msg(self, msg):
+        pass
+
+    def start_timer(self, holdtime):
+        self.holdtime = min(self.holdtime, holdtime)
+
+        # setup the function to send keepalives
+        self.keepalive = task.LoopingCall(self.send_keepalive)
+        interval = self.holdtime / 2
+        self.keepalive.start(interval)
+
+        # setup the expiry timer
+        self.expiry = reactor.callLater(self.holdtime, self.expired)
 
     def expired(self):
         self.keepalive.stop()

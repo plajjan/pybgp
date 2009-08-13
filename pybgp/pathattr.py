@@ -58,11 +58,21 @@ class PathAttr:
     def packvalue(self):
         return self.value
 
+    def _flags(self):
+        s = []
+        if self.flags & 0x80:
+            s.append('optional')
+        if self.flags & 0x40:
+            s.append('transitive')
+        if self.flags & 0x20:
+            s.append('partial')
+        return ','.join(s)
+
     def __repr__(self):
-        return '<%s type/num=%s/%s flags %x value %r>' % (
+        return '<%s type/num=%s/%s flags %s value %r>' % (
                 self.__class__.__name__,
                 self.type, self.typenum,
-                self.flags,
+                self._flags(),
                 self.value,
                 )
 
@@ -89,6 +99,8 @@ class PathAttr:
 class Origin(PathAttr):
     typenum = 1
     type = 'origin'
+    # not optional, transitive
+    flags = 0x40
 
     def __init__(self, val='incomplete'):
         self.value = val
@@ -119,8 +131,21 @@ class Origin(PathAttr):
 class AsPath(PathAttr):
     typenum = 2
     type = 'aspath'
+    # non-optional, transitive
+    flags = 0x40
 
-    def __init__(self, val):
+    def __init__(self, v):
+        if isinstance(v, str):
+            val = []
+            for seg in v.split():
+                if seg.startswith('set(') and seg.endswith(')'):
+                    seg = set([int(s) for s in seg[4:-1].split(',')])
+                else:
+                    seg = [int(s) for s in seg.split(',')]
+                val.append(seg)
+        else:
+            val = v
+                   
         self.value = val
 
     def __repr__(self):
@@ -189,6 +214,8 @@ class AsPath(PathAttr):
 class NextHop(PathAttr):
     typenum = 3
     type = 'nexthop'
+    # non-optional, transitive
+    flags = 0x40
 
     def __init__(self, val):
         self.value = val
@@ -221,10 +248,14 @@ class IntAttr(PathAttr):
 class Med(IntAttr):
     type = 'med'
     typenum = 4
+    # optional, non-transitive
+    flags = 0x80
 
 class LocalPref(IntAttr):
     type = 'localpref'
     typenum = 5
+    # optional, transitive
+    flags = 0xc0
 
 class Originator(PathAttr):
     type = 'originator'
