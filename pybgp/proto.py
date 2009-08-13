@@ -153,6 +153,7 @@ class Notification:
         (3,8): 'invalid next hop attr',
         (3,9): 'operational attribute error',
         (3,10): 'invalid network field',
+        (3,11): 'malformed AS_PATH',
     }
 
     def from_bytes(cls, bytes):
