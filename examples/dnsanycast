@@ -1,6 +1,11 @@
 #!/usr/bin/python2.5
 
+import socket
+import sys
+import os
+
 from twisted.internet import reactor, protocol
+from twisted.python import log
 
 from pybgp import speaker, pathattr, proto
 
@@ -30,93 +35,160 @@ class Checker(tcpcheck.Checker):
         else:
             self.bgp.withdraw('%s/32' % (self.host,))
 
-class BGPp(speaker.BGP):
-    def send(self, msg):
-        print "sending", msg
-        speaker.BGP.send(self, msg)
+bgp_connect = protocol.ClientCreator(reactor, speaker.BGP)
 
-class BGPd:
-    # This is all a bit hacky. Proper support for both listening and
-    # connecting, the BGP state machine, disconnects and so forth are
-    # all needed...
+class Peer:
+    def __init__(self, process, ip, remoteas):
+        self.proto = None
+        self.host = ip
+        self.asnum = remoteas
+        self.process = process
+        self.state = 'idle'
 
+        self.routes = None
+
+    def start(self):
+        if self.state!='idle':
+            raise Exception('already connected')
+
+        self.routes = set()
+        self.state = 'connecting'
+
+        d = bgp_connect.connectTCP(self.host, 179)
+        d.addCallbacks(self.ok, self.err)
+
+    def ok(self, protocol):
+        self.proto = protocol
+        self.state = 'connected'
+
+        log.msg("peer connected", self.host)
+
+        # hook up the message callback to ourselves
+        self.proto.handle_msg = self.msg
+
+        # send an open
+        self.proto.open(self.process.asnum, self.process.bgpid)
+
+    def err(self, reason):
+        log.msg("connection to", self.host, "failed", reason)
+
+        self.state = 'idle'
+        
+        reactor.callLater(5, self.start)
+
+    def msg(self, msg):
+        if msg.kind=='open':
+            if self.state!='connected':
+                raise Exception('open at invalid time')
+
+            log.msg("peer opened", self.host)
+
+            self.state = 'open'
+            self.proto.start_timer(msg.holdtime)
+
+            reactor.callLater(0.5, self.send_updates)
+
+        elif msg.kind=='notification':
+            log.msg("notification from", self.host, msg)
+            self.proto.transport.loseConnection()
+
+            self.state = 'idle'
+            self.proto = None
+
+            reactor.callLater(5, self.start)
+
+    def send_updates(self):
+        if self.state!='open':
+            return
+
+        current = self.process.routes()
+        to_send = []
+        to_withdraw = []
+
+        for route in current:
+            if not route in self.routes:
+                self.routes.add(route)
+                to_send.append(route)
+
+        for route in self.routes:
+            if not route in current:
+                to_withdraw.append(route)
+
+        for route in to_withdraw:
+            self.routes.remove(route)
+
+        if to_send:
+            up = proto.Update(
+                    pathattr.Origin('incomplete'),
+                    pathattr.Med(0),
+                    pathattr.AsPath([[self.process.asnum]]),
+                    pathattr.NextHop(self.process.bgpid),
+                    nlri=to_send,
+                    withdraw=to_withdraw,
+                    )
+            log.msg("sending update to", self.host, up)
+            self.proto.send(up)
+            
+
+        elif to_withdraw:
+            up = proto.Update(withdraw=to_withdraw)
+            log.msg("sending update to", self.host, up)
+            self.proto.send(up)
+
+class BgpProcess:
     def __init__(self, asnum, bgpid):
-        self.cc = protocol.ClientCreator(reactor, BGPp)
         self.asnum = asnum
         self.bgpid = bgpid
+
         self.peers = {}
+
+        self._routes = {}
+        self.timer = None
 
     def peer(self, ip, remoteas):
         if ip in self.peers:
             raise Exception('connection already established')
 
-        self.peers[ip] = {'remoteas': remoteas, 'state': 'opening', 'proto': None, 'queue': []}
+        p = Peer(self, ip, remoteas)
+        p.start()
 
-        d = self.cc.connectTCP(ip, 179)
-        d.addCallbacks(self.ok, self.err, (ip,), {}, (ip,), {})
-
-    def ok(self, proto, ip):
-        print "connection to", ip, "up"
-        self.peers[ip]['proto'] = proto
-        self.peers[ip]['state'] = 'open'
-
-        # send our Open message
-        proto.open(self.asnum, self.bgpid)
-        proto.handle_msg = lambda x: self.msg(ip, x)
-
-    def msg(self, ip, msg):
-        if not ip in self.peers:
-            return
-        proto = self.peers[ip]['proto']
-
-        if msg.kind=='open':
-            proto.start_timer(msg.holdtime)
-
-            q = self.peers[ip]['queue']
-            while q:
-                action, data = q.pop(0)
-                if action=='update':
-                    proto.send(data)
-
-        elif msg.kind=='notification':
-            print "notification from", ip, msg
-            proto.transport.loseConnection()
-            del self.peers[ip]
-
-    def err(self, reason, ip):
-        if not ip in self.peers:
-            return
-        print "connection to", ip, "failed", reason
-        del self.peers[ip]
+        self.peers[ip] = p
 
     def advertise(self, prefix):
-        up = proto.Update(
-            pathattr.Origin('incomplete'),
-            pathattr.Med(0),
-            pathattr.AsPath([[self.asnum]]),
-            pathattr.NextHop('155.198.62.12'),
-            nlri=[prefix],
-            )
-        for p, info in self.peers.items():
-            if info['state']=='open':
-                info['proto'].send(up)
-            else:
-                info['queue'].append(('update', up))
-        
-    def withdraw(self, prefix):
-        up = proto.Update(
-            withdraw=[prefix],
-            )
-        for p, info in self.peers.items():
-            if info['state']=='open':
-                info['proto'].send(up)
-            else:
-                info['queue'].append(('update', up))
-        
+        self._routes[prefix] = True
 
-def main():
-    b = BGPd(65001, '192.168.1.2')
-    b.peer('192.168.1.1', 65000)
+        if self.timer:
+            log.msg('advertising', prefix, '(coalescing)')
+            self.timer.delay(0.1)
+        else:
+            log.msg('advertising', prefix)
+            self.timer = reactor.callLater(0.1, self.update)
+
+    def withdraw(self, prefix):
+        if not prefix in self._routes:
+            return
+        del self._routes[prefix]
+
+        if self.timer:
+            log.msg('withdrawing', prefix, '(coalescing)')
+            self.timer.delay(0.1)
+        else:
+            log.msg('withdrawing', prefix)
+            self.timer = reactor.callLater(0.1, self.update)
+
+    def update(self):
+        self.timer = None
+        for ip, peer in self.peers.items():
+            log.msg('asking peer', ip, 'to update')
+            peer.send_updates()
+
+    def routes(self):
+        return self._routes.keys()
+        
+def main(bgpid):
+    b = BgpProcess(65001, bgpid)
+    b.peer('192.168.1.254', 65000)
+    b.peer('192.168.1.253', 65000)
 
     for ip in ('192.168.2.1', '192.168.2.2'):
         c = Checker(ip, 53, '127.0.0.1')
@@ -124,5 +196,9 @@ def main():
         c.start(5)
 
 if __name__=='__main__':
-    reactor.callWhenRunning(main)
+    myip = socket.gethostbyname(os.uname()[1])
+
+    log.startLogging(sys.stderr)
+
+    reactor.callWhenRunning(main, myip)
     reactor.run()

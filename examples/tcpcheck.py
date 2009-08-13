@@ -1,6 +1,7 @@
 #!/usr/bin/python2.5
 
 from twisted.internet import reactor, protocol, task
+from twisted.python import log
 
 class TcpProbeProt(protocol.Protocol):
     def connectionMade(self):
@@ -10,6 +11,7 @@ class TcpProbeProt(protocol.Protocol):
 class TcpProbe(protocol.ClientFactory):
     protocol = TcpProbeProt
     ok = 0
+    noisy = False
 
     def clientConnectionFailed(self, connector, reason):
         self.callback(False)
@@ -41,7 +43,6 @@ class Checker:
         reactor.connectTCP(self.host, self.port, f, timeout=self.timeout, bindAddress=(self.localif,0))
 
     def callback(self, up):
-        print "state", up
         if up:
             if self.state=='down':
                 self.change('down', 'up')
@@ -52,4 +53,4 @@ class Checker:
             self.state = 'down'
 
     def change(self, old, new):
-        print "state for %s:%s (from %s) changes from %s to %s" % (self.host, self.port, self.localif, old, new)
+        log.msg("state for", self.host, self.port, "changes from", old, "to", new)
