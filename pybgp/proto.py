@@ -5,7 +5,7 @@ import socket
 from odict import OrderedDict as OD
 
 
-from pybgp import nlri, pathattr
+from pybgp import nlri, pathattr, exceptions
 
 class Open:
     kind = 'open'
@@ -28,8 +28,6 @@ class Open:
         
         self.version, self.asnum, self.holdtime, bgpid, paramlen = struct.unpack_from('!BHH4sB', bytes)
         self.bgpid = socket.inet_ntoa(bgpid)
-        if paramlen==0:
-            return
 
         assert len(bytes) == 10 + paramlen, "message too short?"
 
@@ -133,6 +131,11 @@ class Notification:
     kind = 'notification'
     number = 3
 
+    def __init__(self, code, subcode, data=''):
+        self.code = code
+        self.subcode = subcode
+        self.data = data
+
     REASONS = {
         (1,1): 'not synchronised',
         (1,2): 'bad message len',
@@ -157,12 +160,10 @@ class Notification:
     }
 
     def from_bytes(cls, bytes):
-        self = cls()
+        code, subcode = struct.unpack_from('BB', bytes)
+        data = bytes[2:]
 
-        self.code, self.subcode = struct.unpack_from('BB', bytes)
-        self.data = bytes[2:]
-
-        return self
+        return cls(code, subcode, data)
     from_bytes = classmethod(from_bytes)
 
     def __str__(self):
@@ -170,6 +171,13 @@ class Notification:
         if (c,s) in self.REASONS:
             return 'Notification "%s" params %r' % (self.REASONS[c,s], self.data)
         return 'Notification message code=%d subcode=%d params=%r' % (self.code, self.subcode, self.data)
+
+    def encode(self):
+        v = struct.pack('BB', self.code, self.subcode)
+        if self.data:
+            v += self.data
+        return v
+
 
 class Update:
     kind = 'update'
@@ -265,4 +273,32 @@ class Update:
             v += n.encode()
 
         return v
+
+
+class ProtoBase:
+    def parse_payload(self, type, payload):
+        length = len(payload)
+        totlen = length + 19
+
+        if type==1:
+            if length<10:
+                raise exceptions.BadLen(type, totlen)
+            return Open.from_bytes(payload)
+
+        elif type==2:
+            if length<4:
+                raise exceptions.BadLen(type, totlen)
+            return Update.from_bytes(payload)
+
+        elif type==3:
+            if length<2:
+                raise exceptions.BadLen(type, totlen)
+            return Notification.from_bytes(payload)
+
+        elif type==4:
+            if length:
+                print "keepalive with data? %r" % (payload,)
+            return Keepalive.from_bytes(payload)
+
+        raise exceptions.BadMsg(type)
 

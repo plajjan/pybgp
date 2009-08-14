@@ -2,7 +2,7 @@
 
 import unittest
 
-from pybgp import proto, pathattr, nlri
+from pybgp import proto, pathattr, nlri, exceptions
 
 class TestOpen(unittest.TestCase):
     def test_decode(self):

@@ -4,9 +4,9 @@ import struct
 from twisted.internet import reactor, protocol, task
 from twisted.python import log
 
-from pybgp import nlri, pathattr, proto
+from pybgp import nlri, pathattr, proto, exceptions
 
-class BGP(protocol.Protocol):
+class BGP(protocol.Protocol, proto.ProtoBase):
 
     def connectionMade(self):
         self.buffer = ''
@@ -37,35 +37,33 @@ class BGP(protocol.Protocol):
             if len(self.buffer) < 19:
                 return
             auth, length, type = struct.unpack('!16sHB', self.buffer[:19])
+
+            if auth!='\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff':
+                return self.notify(exceptions.NotSync())
+
+            if length < 19 or length > 4096:
+                return self.notify(exceptions.BadLen(type, length))
+
             if len(self.buffer) < length:
                 return
 
-            msg = self.buffer[:length]
+            payload = self.buffer[19:length]
             self.buffer = self.buffer[length:]
 
-            msg = self.parse_msg(msg)
+            try:
+                msg = self.parse_payload(type, payload)
+            except exceptions.BgpExc, ex:
+                return self.notify(ex)
 
             self._handle_msg(msg)
 
-    def parse_msg(self, msg):
-        auth, length, type = struct.unpack('!16sHB', msg[:19])
-        payload = msg[19:]
-        del msg
-
-        if type==1:
-            return proto.Open.from_bytes(payload)
-
-        elif type==2:
-            return proto.Update.from_bytes(payload)
-
-        elif type==3:
-            return proto.Notification.from_bytes(payload)
-
-        elif type==4:
-            return proto.Keepalive.from_bytes(payload)
-
-        else:
-            raise Exception('invalid message')
+    def notify(self, ex):
+        if ex.send_error:
+            log.msg("sending notify", ex)
+            notify = proto.Notification(ex.code, ex.subcode, ex.data)
+            self.send(notify)
+        log.msg("disconnecting")
+        self.transport.loseConnection()
 
     def send(self, msg):
         body = msg.encode()
