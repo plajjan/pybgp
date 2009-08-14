@@ -38,6 +38,8 @@ def decode(bytes, idx=0):
         obj = ClusterList.from_bytes(vl)
     elif type==14:
         obj = MpReachNlri.from_bytes(vl)
+    elif type==15:
+        obj = MpUnreachNlri.from_bytes(vl)
     elif type==16:
         obj = ExtCommunity.from_bytes(vl)
     else:
@@ -354,6 +356,41 @@ class MpReachNlri(PathAttr):
         v += chr(self.reserved or 0)
 
         for n in self.value['nlri']:
+            v += n.encode()
+        return v
+
+class MpUnreachNlri(PathAttr):
+    typenum = 15
+    type = 'mp-unreach-nlri'
+
+    def __init__(self, val):
+        self.value = val
+
+    def __repr__(self):
+        return '<MpUneachNlri afi=%d safi=%d %d withdraw>' % (
+                self.value['afi'],
+                self.value['safi'],
+                len(self.value['withdraw']),
+                )
+
+    def from_bytes(cls, val):
+        afi, safi = struct.unpack_from('!HB', val)
+
+        w = nlri.parse(val[3:], afi, safi)
+
+        v = cls(dict(afi=afi, safi=safi, withdraw=w))
+
+        return v
+
+    from_bytes = classmethod(from_bytes)
+
+    def packvalue(self):
+        afi = self.value['afi']
+        safi = self.value['safi']
+
+        v = struct.pack('!HB', afi, safi)
+
+        for n in self.value['withdraw']:
             v += n.encode()
         return v
 

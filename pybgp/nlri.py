@@ -21,10 +21,12 @@ class vpnv4(NLRI):
         self.prefix = prefix
 
     def __repr__(self):
-        return '<vpnv4 label %s rd %s prefix %s>' % (
-                ','.join([str(l) for l in self.labels]),
-                self.rd, self.prefix,
-                )
+        if self.labels:
+            l = ','.join([str(l) for l in self.labels])
+        else:
+            l = 'none'
+
+        return '<vpnv4 label %s rd %s prefix %s>' % (l, self.rd, self.prefix)
 
     def __str__(self):
         return '%s:%s' % (self.rd, self.prefix)
@@ -95,14 +97,22 @@ class vpnv4(NLRI):
         # plen is the length, in bits, of all the MPLS labels, plus the 8-byte RD, plus the IP prefix
         labels = []
         while True:
-            label, lo = struct.unpack_from('>HB', val, idx)
-            bottom = lo & 1
-            label = (label << 4) + (lo >> 4)
+            ls, = struct.unpack_from('3s', val, idx)
             idx += 3
-            labels.append(label)
             plen -= 24
+
+            if ls=='\x80\x00\x00':
+                # special null label for vpnv4 withdraws
+                labels = None
+                break
+
+            label, = struct.unpack_from('!I', '\x00'+ls)
+            bottom = label & 1
+
+            labels.append(label >> 4)
             if bottom:
                 break
+
         rdtype, rd = struct.unpack_from('!H6s', val, idx)
         if rdtype==1:
             rdip, num = struct.unpack('!4sH', rd)
@@ -122,8 +132,6 @@ class vpnv4(NLRI):
         prefix = pip(ip, plen)
 
         return cls(labels, rd, prefix)
-
-
 
 class ipv4(NLRI):
     def __init__(self, prefix):

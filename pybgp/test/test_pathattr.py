@@ -157,3 +157,46 @@ class TestMpReachNlri(unittest.TestCase):
                 )
             ]
             )
+
+class TestMpUnreachNlri(unittest.TestCase):
+    def test_encode(self):
+        r = pathattr.MpUnreachNlri(dict(
+            afi=1,
+            safi=128,
+            withdraw=[nlri.vpnv4([111,222,333], '192.168.0.0:2', '192.168.2.0/24')],
+            ))
+
+        b = r.encode()
+
+        self.assertEqual(b, '\x00\x0f\x18\x00\x01\x80\xa0\x00\x06\xf0\x00\r\xe0\x00\x14\xd1\x00\x01\xc0\xa8\x00\x00\x00\x02\xc0\xa8\x02')
+
+    def test_decode(self):
+        payload = '\x00\x01'# afi
+        payload += chr(128) # safi
+
+        prefix = '\x80\x00\x00'     # mpls special no-label
+        prefix += '\x00\x01\xc0\xa8\x00\x00\x00\x02'    # rd 192.168.0.0:2
+
+        prefix += '\xc0\xa8\x02\x80'    # 192.168.2
+        masklen = 25
+
+        prefix_len = 24 + 8*8 + masklen
+
+        payload += chr(prefix_len)
+        payload += prefix
+
+        b = '\x00\x0f'
+        b += chr(len(payload))
+        b += payload
+
+        used, mpunreach = pathattr.decode(b)
+
+        self.assertEqual(used, len(b))
+        self.failUnless(isinstance(mpunreach, pathattr.MpUnreachNlri))
+
+        self.assertEqual(mpunreach.value['afi'], 1)
+        self.assertEqual(mpunreach.value['safi'], 128)
+        self.assertEqual(mpunreach.value['withdraw'], [
+            nlri.vpnv4(None, '192.168.0.0:2', '192.168.2.128/25')
+            ]
+            )
