@@ -1,6 +1,9 @@
+Local copy notes
+----------------
+
 This is my github copy of pybgp, which is usually hosted on launchpad. Although
 I have little towards bzr, I am mort comfortable with git and I really like
-github so I thought I'd make a copy here for my own convenience. Please not
+github so I thought I'd make a copy here for my own convenience. Please note
 that at this point, this version is not modified from the original with
 exception to this readme file.
 
