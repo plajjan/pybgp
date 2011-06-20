@@ -1,5 +1,5 @@
-Local copy notes
-----------------
+Github copy notes
+-----------------
 
 This is my github copy of pybgp, which is usually hosted on launchpad. Although
 I have little towards bzr, I am mort comfortable with git and I really like
